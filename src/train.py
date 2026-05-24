@@ -29,6 +29,7 @@ from sklearn.utils.class_weight import compute_class_weight
 from transformers import (
     AutoModelForSequenceClassification,
     AutoTokenizer,
+    DataCollatorWithPadding,
     EarlyStoppingCallback,
     Trainer,
     TrainingArguments,
@@ -58,12 +59,12 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 # ---------------------------------------------------------------------------
 MODEL_NAME = "distilbert-base-uncased"
 MAX_LENGTH = 512
-BATCH_SIZE = 8
+BATCH_SIZE = 16
 EPOCHS = 8
 LEARNING_RATE = 2e-5
 WEIGHT_DECAY = 0.01
-WARMUP_RATIO = 0.1
-GRADIENT_ACCUMULATION = 2
+WARMUP_STEPS = 27
+GRADIENT_ACCUMULATION = 1
 
 # Device detection
 if torch.cuda.is_available():
@@ -137,7 +138,7 @@ class WeightedTrainer(Trainer):
         super().__init__(*args, **kwargs)
         self.class_weights = class_weights
 
-    def compute_loss(self, model, inputs, return_outputs=False):
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         labels = inputs.pop("labels")
         outputs = model(**inputs)
         loss_fn = nn.CrossEntropyLoss(weight=self.class_weights)
@@ -204,7 +205,7 @@ def train():
     # -- Training arguments --
     training_args = TrainingArguments(
         output_dir=str(MODEL_DIR / "checkpoints"),
-        evaluation_strategy="steps",
+        eval_strategy="steps",
         eval_steps=50,
         save_strategy="steps",
         save_steps=50,
@@ -215,7 +216,7 @@ def train():
         per_device_eval_batch_size=BATCH_SIZE,
         num_train_epochs=EPOCHS,
         weight_decay=WEIGHT_DECAY,
-        warmup_ratio=WARMUP_RATIO,
+        warmup_steps=WARMUP_STEPS,
         gradient_accumulation_steps=GRADIENT_ACCUMULATION,
         load_best_model_at_end=True,
         metric_for_best_model="eval_f1_macro",
@@ -227,13 +228,14 @@ def train():
     )
 
     # -- Trainer --
+    data_collator = DataCollatorWithPadding(tokenizer=tokenizer)
     trainer = WeightedTrainer(
         class_weights=class_weights,
         model=model,
         args=training_args,
         train_dataset=train_ds,
         eval_dataset=val_ds,
-        tokenizer=tokenizer,
+        data_collator=data_collator,
         compute_metrics=compute_metrics,
         callbacks=[EarlyStoppingCallback(early_stopping_patience=4)],
     )

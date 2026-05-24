@@ -29,9 +29,7 @@ credentials.json
 .env.local
 
 # Output (generated from code, not source)
-output/figures/
-output/tables/
-output/metrics/
+output/
 
 # Video folder (keep only link.txt)
 video/*
