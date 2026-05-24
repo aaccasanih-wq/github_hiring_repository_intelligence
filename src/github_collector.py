@@ -528,18 +528,13 @@ class GitHubCollector:
     def collect_round2(self, labeled_df: pd.DataFrame,
                        min_per_class: int = 120) -> pd.DataFrame:
         """
-        Execute Round 2: target under-represented classes.
+        Execute Round 2: targeted queries informed by Round-1 patterns.
 
-        Parameters
-        ----------
-        labeled_df : DataFrame
-            Round-1 data with LLM labels (must have 'label' column).
-        min_per_class : int
-            Target minimum repos per category.
-
-        Returns
-        -------
-        DataFrame with new repos and their signals.
+        For each under-represented class, analyzes which structural cell
+        combinations (stars × age × activity) produced it in Round 1,
+        then builds queries targeting those same cells — WITHOUT using
+        labels in the query (only structural qualifiers). The LLM still
+        classifies freely.
         """
         logger.info("=" * 60)
         logger.info("ROUND 2 — Informed Sampling for Class Balance")
@@ -555,51 +550,91 @@ class GitHubCollector:
 
         deficient = dist[dist < min_per_class]
         if deficient.empty:
-            logger.info("All classes meet minimum target of %d. No Round 2 needed.", min_per_class)
+            logger.info("All classes meet minimum of %d. No Round 2 needed.", min_per_class)
             return pd.DataFrame()
 
         logger.info("Deficient classes: %s", deficient.index.tolist())
 
+        # Build empirical profiles per deficient class from Round-1 data
+        profiles = {}
+        for label_name in deficient.index:
+            subset = labeled_df[labeled_df[label_col] == label_name]
+
+            # Dominant star range
+            star_profile = self._dominant_star_range(subset)
+            # Dominant age range (created_at bucket)
+            age_profile = self._dominant_age_range(subset)
+            # Dominant activity (commits_6m bucket)
+            activity_profile = self._dominant_activity_range(subset)
+            # Allow forks?
+            allow_forks = star_profile in ("micro",) and label_name in ("intern",)
+
+            profiles[label_name] = {
+                "needed": min_per_class - dist[label_name],
+                "star_range": star_profile,
+                "pushed_qualifier": activity_profile,
+                "created_qualifier": age_profile,
+                "allow_forks": allow_forks,
+                "use_template_topic": label_name == "template",
+            }
+            logger.info(
+                "  %s: need %d → stars=%s, activity=%s, age=%s, forks=%s, template_topic=%s",
+                label_name, profiles[label_name]["needed"],
+                star_profile, activity_profile, age_profile,
+                allow_forks, label_name == "template",
+            )
+
+        # Collect repos per class
         all_new: list[dict] = []
         repo_ids = set(labeled_df["repo_id"].tolist())
 
-        for label_name, current_count in deficient.items():
-            needed = min_per_class - current_count
-            logger.info("Targeting %d more repos for class '%s'", needed, label_name)
+        for label_name, profile in profiles.items():
+            needed = profile["needed"]
+            # Add margin: target ~30% more to account for quality filter rejects
+            target = int(needed * 1.4)
+            logger.info("Targeting ~%d search hits for '%s' (need %d + margin)",
+                        target, label_name, needed)
 
-            # Find which structural cells produced this label most in Round 1
-            subset = labeled_df[labeled_df[label_col] == label_name]
-            # Gather star buckets and cell info from original search context
-            # For simplicity: use queries without strict cell criteria,
-            # cycling through star ranges and languages
             collected_for_class = 0
-            for sr_list in STAR_SUB_RANGES.values():
+            sub_ranges = STAR_SUB_RANGES[profile["star_range"]]
+
+            for sr in sub_ranges:
                 if collected_for_class >= needed:
                     break
-                for sr in sr_list:
+                for lang in LANGUAGES:
                     if collected_for_class >= needed:
                         break
-                    for lang in LANGUAGES[:3]:  # top 3 languages to be faster
+
+                    query = self._build_query(
+                        stars=sr,
+                        pushed=profile["pushed_qualifier"],
+                        created=profile["created_qualifier"],
+                        language=lang,
+                        topic="template,boilerplate" if profile["use_template_topic"] else None,
+                        allow_forks=profile["allow_forks"],
+                    )
+                    logger.info("  [%s][%s] %s", label_name, lang, query)
+
+                    repos_per_q = max(3, (target - collected_for_class) // (len(sub_ranges) * len(LANGUAGES)) + 1)
+                    items = self._search_random_pages(query, repos_per_q)
+
+                    for item in items:
+                        if item["id"] in repo_ids:
+                            continue
+                        if not self._passes_quality_filters(item):
+                            continue
+                        repo_ids.add(item["id"])
+                        try:
+                            signals = self._extract_all_signals(item)
+                            all_new.append(signals)
+                            collected_for_class += 1
+                        except Exception as exc:
+                            logger.error("Round 2 extract error: %s", exc)
                         if collected_for_class >= needed:
                             break
-                        query = self._build_query(stars=sr, language=lang)
-                        items = self._search_random_pages(query, 5)
-                        for item in items:
-                            if item["id"] in repo_ids:
-                                continue
-                            if not self._passes_quality_filters(item):
-                                continue
-                            repo_ids.add(item["id"])
-                            try:
-                                signals = self._extract_all_signals(item)
-                                all_new.append(signals)
-                                collected_for_class += 1
-                                if collected_for_class >= needed:
-                                    break
-                            except Exception as exc:
-                                logger.error("Round 2 extract error: %s", exc)
 
-            logger.info("Collected %d repos for class '%s'", collected_for_class, label_name)
+            logger.info("Collected %d repos for class '%s' (needed %d)",
+                        collected_for_class, label_name, needed)
 
         df = pd.DataFrame(all_new)
         if not df.empty:
@@ -607,6 +642,48 @@ class GitHubCollector:
             df.to_csv(out_path, index=False)
             logger.info("Round 2 saved: %d repos → %s", len(df), out_path)
         return df
+
+    # ------------------------------------------------------------------
+    # Round-2 helpers — structural pattern extraction
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _dominant_star_range(subset: pd.DataFrame) -> str:
+        """Return the star bucket that produced the most repos of a class."""
+        stars = subset["stars"]
+        if (stars <= 5).mean() >= 0.5:
+            return "micro"
+        if (stars <= 50).mean() >= 0.5:
+            return "small"
+        if (stars <= 500).mean() >= 0.5:
+            return "medium"
+        if (stars <= 5000).mean() >= 0.5:
+            return "large"
+        return "top"
+
+    @staticmethod
+    def _dominant_age_range(subset: pd.DataFrame) -> str:
+        """Return a created qualifier for the dominant age bucket."""
+        ages = subset["age_days"]
+        if (ages <= 183).mean() >= 0.3:
+            return f">{SIX_MONTHS_AGO.strftime('%Y-%m-%d')}"
+        if (ages <= 730).mean() >= 0.3:
+            return f"{TWO_YEARS_AGO.strftime('%Y-%m-%d')}..{SIX_MONTHS_AGO.strftime('%Y-%m-%d')}"
+        if (ages <= 1826).mean() >= 0.3:
+            return f"{FIVE_YEARS_AGO.strftime('%Y-%m-%d')}..{TWO_YEARS_AGO.strftime('%Y-%m-%d')}"
+        return f"<{FIVE_YEARS_AGO.strftime('%Y-%m-%d')}"
+
+    @staticmethod
+    def _dominant_activity_range(subset: pd.DataFrame) -> str:
+        """Return a pushed qualifier for the dominant activity bucket."""
+        commits = subset["commits_6m"]
+        if (commits == 0).mean() >= 0.3:
+            return f"<{TWELVE_MONTHS_AGO.strftime('%Y-%m-%d')}"
+        if (commits <= 5).mean() >= 0.3:
+            return f"<{SIX_MONTHS_AGO.strftime('%Y-%m-%d')}"
+        if (commits <= 30).mean() >= 0.3:
+            return f">{SIX_MONTHS_AGO.strftime('%Y-%m-%d')}"
+        return f">{ONE_MONTH_AGO.strftime('%Y-%m-%d')}"
 
     # ------------------------------------------------------------------
     # Full pipeline entry point
