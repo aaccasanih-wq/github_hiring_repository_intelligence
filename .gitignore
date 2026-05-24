@@ -1,0 +1,42 @@
+# Data files (large, auto-generated)
+data/
+
+# Trained models (large binaries)
+models/trained_models/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+
+# Virtual environment
+.env
+.venv/
+venv/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# API tokens / secrets
+*.token
+credentials.json
+.env.local
+
+# Output (generated from code, not source)
+output/figures/
+output/tables/
+output/metrics/
+
+# Video folder (keep only link.txt)
+video/*
+!video/link.txt
+
+# IDE
+.vscode/
+.idea/
