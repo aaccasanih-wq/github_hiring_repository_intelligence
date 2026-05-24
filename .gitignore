@@ -37,6 +37,14 @@ output/metrics/
 video/*
 !video/link.txt
 
+# Claude session files (not project deliverables)
+CLAUDE.md
+CHANGELOG.md
+SPEC.md
+
+# Colab intermediate files
+colab_bert_training.ipynb
+
 # IDE
 .vscode/
 .idea/
