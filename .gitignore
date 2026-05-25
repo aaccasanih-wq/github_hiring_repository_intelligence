@@ -30,7 +30,8 @@ credentials.json
 .env.local
 
 # Output (generated from code, not source)
-output/
+output/*
+!output/evaluation_report.md
 
 # Video folder (keep only link.txt)
 video/*
