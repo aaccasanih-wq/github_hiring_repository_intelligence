@@ -4,6 +4,10 @@ Stage 5 of the GitHub Hiring Repository Intelligence pipeline.
 
 Fine-tunes DistilBERT on the text_repr column with class-weighted loss
 to handle the imbalanced 6-category dataset (539 train / 115 val / 116 test).
+
+Set APPROACH env var to switch between labeling strategies:
+  APPROACH=v1 (default) — baseline prompt
+  APPROACH=v2            — alternative operationalized prompt
 """
 
 import logging
@@ -74,10 +78,16 @@ elif torch.backends.mps.is_available():
 else:
     DEVICE = "cpu"
 
+# Approach: "v1" (baseline) or "v2" (alternative). Set via APPROACH env var.
+APPROACH = os.getenv("APPROACH", "v1")
+SUFFIX = "" if APPROACH == "v1" else f"_{APPROACH}"
+
 # Paths
 ROOT = get_project_root()
-MODEL_DIR = ROOT / "models" / "trained_models"
+MODEL_DIR = ROOT / "models" / f"trained_models{SUFFIX}"
 OUTPUT_DIR = ROOT / "output"
+if APPROACH != "v1":
+    OUTPUT_DIR = OUTPUT_DIR / APPROACH
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -93,8 +103,8 @@ logger = logging.getLogger(__name__)
 # Data loading
 # ---------------------------------------------------------------------------
 def load_split(name: str) -> pd.DataFrame:
-    """Load a single split CSV."""
-    path = ROOT / "data" / "splits" / f"{name}.csv"
+    """Load a single split CSV (respects APPROACH env var for file naming)."""
+    path = ROOT / "data" / "splits" / f"{name}{SUFFIX}.csv"
     return pd.read_csv(path)
 
 
@@ -150,8 +160,8 @@ class WeightedTrainer(Trainer):
 # Main training routine
 # ---------------------------------------------------------------------------
 def train():
-    logger.info("===== Stage 5: BERT Fine-Tuning =====")
-    logger.info("Device: %s | Model: %s", DEVICE, MODEL_NAME)
+    logger.info("===== Stage 5: BERT Fine-Tuning (approach=%s) =====", APPROACH)
+    logger.info("Device: %s | Model: %s | Output: %s", DEVICE, MODEL_NAME, OUTPUT_DIR)
 
     # -- Load data --
     train_df = load_split("train")

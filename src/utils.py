@@ -66,6 +66,7 @@ def save_csv(df: pd.DataFrame, filename: str, subdir: str = "processed"):
 
 def create_splits(df: pd.DataFrame | None = None,
                   label_col: str = "label",
+                  input_csv: str = "combined_labeled.csv",
                   train_size: float = 0.70,
                   val_size: float = 0.15,
                   test_size: float = 0.15,
@@ -75,8 +76,11 @@ def create_splits(df: pd.DataFrame | None = None,
 
     Parameters
     ----------
-    df : DataFrame or None. If None, loads from data/labeled/combined_labeled.csv
+    df : DataFrame or None. If None, loads from data/labeled/<input_csv>
     label_col : column with string category labels
+    input_csv : filename in data/labeled/ to load when df is None.
+                Suffix determines output names (e.g. combined_labeled_v2.csv
+                produces train_v2.csv / val_v2.csv / test_v2.csv).
     train_size, val_size, test_size : proportions (must sum to 1.0)
     random_state : seed for reproducibility
 
@@ -86,7 +90,11 @@ def create_splits(df: pd.DataFrame | None = None,
     Also saves CSVs to data/splits/.
     """
     if df is None:
-        df = load_csv("combined_labeled.csv", subdir="labeled")
+        df = load_csv(input_csv, subdir="labeled")
+
+    # Derive output suffix from input filename
+    stem = Path(input_csv).stem  # e.g. "combined_labeled" or "combined_labeled_v2"
+    suffix = stem.replace("combined_labeled", "")  # "" or "_v2"
 
     # Remove rows with error/unknown labels
     valid_labels = set(LABEL_TO_ID.keys())
@@ -112,9 +120,9 @@ def create_splits(df: pd.DataFrame | None = None,
 
     splits_dir = get_project_root() / "data" / "splits"
     ensure_dir(splits_dir)
-    train.to_csv(splits_dir / "train.csv", index=False)
-    val.to_csv(splits_dir / "val.csv", index=False)
-    test.to_csv(splits_dir / "test.csv", index=False)
+    train.to_csv(splits_dir / f"train{suffix}.csv", index=False)
+    val.to_csv(splits_dir / f"val{suffix}.csv", index=False)
+    test.to_csv(splits_dir / f"test{suffix}.csv", index=False)
 
     return train, val, test
 

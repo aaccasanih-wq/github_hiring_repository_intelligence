@@ -2,7 +2,8 @@
 data/
 
 # Trained models (large binaries)
-models/trained_models/
+models/trained_models*/
+models/trained_models_v2/
 
 # Python cache
 __pycache__/
