@@ -1,5 +1,7 @@
 """Helper functions shared across pipeline modules."""
 
+from __future__ import annotations
+
 import os
 from pathlib import Path
 
