@@ -128,6 +128,8 @@ def load_labeled_data(version: str = "v1") -> pd.DataFrame:
     filename = "combined_labeled.csv" if version == "v1" else "combined_labeled_v2.csv"
     path = PROJECT_ROOT / "data" / "labeled" / filename
     df = pd.read_csv(path)
+    # Drop repos where LLM labeling failed (API timeout → label = "error")
+    df = df[df["label"].isin(CLASS_ORDER)].copy()
     # Ensure label is categorical
     df["label"] = pd.Categorical(df["label"], categories=CLASS_ORDER, ordered=True)
     return df
@@ -501,8 +503,8 @@ def plot_v1_v2_distribution_comparison(df_merged: pd.DataFrame) -> go.Figure:
 def plot_cicd_by_category(df: pd.DataFrame) -> go.Figure:
     """Bar chart showing proportion of repos with CI/CD per category."""
     cicd_pct = (
-        df.groupby("label", observed=True)
-        .apply(lambda g: (g["cicd_workflows"] > 0).mean(), include_groups=False)
+        df.groupby("label", observed=True)["cicd_workflows"]
+        .apply(lambda x: (x > 0).mean())
         .reindex(CLASS_ORDER, fill_value=0)
     )
 
@@ -1634,10 +1636,10 @@ def render_tab4() -> None:
             if pd.notna(repo.get("description")):
                 st.markdown(f"**Description:** {repo['description']}")
 
-            # Show README preview
+            # Show README preview directly (avoid nested expander)
             if pd.notna(repo.get("readme_preview")) and str(repo["readme_preview"]).strip():
-                with st.expander("README Preview", expanded=False):
-                    st.text(str(repo["readme_preview"])[:1500])
+                st.markdown("**README Preview:**")
+                st.text(str(repo["readme_preview"])[:1500])
 
     # -- Label Agreement Analysis -------------------------------------------
     st.markdown("---")
